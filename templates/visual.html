@@ -44,6 +44,11 @@
             background: rgba(255, 255, 255, 0.3);
         }
 
+        .tool-btn.danger:hover {
+            background: rgba(255, 65, 108, 0.3);
+            border-color: rgba(255, 65, 108, 0.5);
+        }
+
         #canvas-container {
             position: relative;
             width: 100%;
@@ -112,8 +117,18 @@
                     <button class="tool-btn" id="nextPage"><i class="fas fa-chevron-right"></i></button>
                 </div>
 
-                <button class="cta-btn" id="saveBtn" style="width: auto; padding: 8px 20px;">
-                    <i class="fas fa-file-pdf"></i> Redact & Download
+                <div>
+                    <button class="tool-btn" id="autoScanBtn" title="Detect Sensitive Info (Client-Side)"
+                        style="border-color: #a8dadc; color: #a8dadc; margin-right: 5px;">
+                        <i class="fas fa-magic"></i> Auto-Scan
+                    </button>
+                    <button class="tool-btn danger" id="clearPageBtn" title="Clear Redactions on Page">
+                        <i class="fas fa-eraser"></i> Clear
+                    </button>
+                </div>
+
+                <button class="cta-btn" id="saveBtn" style="width: auto; padding: 8px 20px; margin-left:10px;">
+                    <i class="fas fa-file-pdf"></i> Download
                 </button>
             </div>
 
@@ -123,7 +138,10 @@
             </div>
 
             <p style="margin-top: 15px; font-size: 0.8rem; opacity: 0.7;">
-                Draw rectangles over the text you want to redact. Use Next/Prev to navigate pages.
+                Draw rectangles manually OR use <b>Auto-Scan</b> to detect Emails, Phones, and Keywords (e.g.
+                Confidential).
+                <br>
+                <i class="fas fa-lock"></i> Auto-detection runs entirely in your browser. No data is shared.
             </p>
         </div>
 
@@ -183,31 +201,131 @@
             renderPage(pageNum);
         });
 
-        function renderPage(num) {
-            pdfDoc.getPage(num).then(function (page) {
-                let viewport = page.getViewport({ scale: scale });
+        document.getElementById('clearPageBtn').addEventListener('click', () => {
+            if (redactions[pageNum]) {
+                if (confirm("Clear all redactions on this page?")) {
+                    redactions[pageNum] = [];
+                    redrawRects(pageNum);
+                }
+            }
+        });
 
-                canvas.height = viewport.height;
-                canvas.width = viewport.width;
-                drawCanvas.height = viewport.height;
-                drawCanvas.width = viewport.width;
+        async function renderPage(num) {
+            const page = await pdfDoc.getPage(num);
+            let viewport = page.getViewport({ scale: scale });
 
-                // Center align
-                // handled by CSS transform
+            canvas.height = viewport.height;
+            canvas.width = viewport.width;
+            drawCanvas.height = viewport.height;
+            drawCanvas.width = viewport.width;
 
-                let renderContext = {
-                    canvasContext: ctx,
-                    viewport: viewport
-                };
+            let renderContext = {
+                canvasContext: ctx,
+                viewport: viewport
+            };
 
-                page.render(renderContext).promise.then(() => {
-                    // Start Drawing logic setup
-                    redrawRects(num);
+            await page.render(renderContext).promise;
+            redrawRects(num);
+            document.getElementById('pageInfo').innerText = `Page ${num} / ${pdfDoc.numPages}`;
+        }
+
+        // --- Auto Redaction Logic ---
+        document.getElementById('autoScanBtn').addEventListener('click', async () => {
+            if (!pdfDoc) return alert("Please upload a PDF first.");
+
+            const btn = document.getElementById('autoScanBtn');
+            const originalText = btn.innerHTML;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Scanning...';
+
+            try {
+                // Get text content
+                const page = await pdfDoc.getPage(pageNum);
+                const textContent = await page.getTextContent();
+                const viewport = page.getViewport({ scale: scale });
+
+                // Privacy-first matchers (Client-side only)
+                const patterns = [
+                    /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g, // Email
+                    /(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/g, // Phone (simple)
+                    /\b(?:\d{4}[-\s]?){3}\d{4}\b/g, // Credit Card (simple)
+                    /\b[A-Z]{5}[0-9]{4}[A-Z]\b/g, // PAN Card (India)
+                    /\b\d{4}\s\d{4}\s\d{4}\b/g, // Aadhaar (India - Space separated)
+                    /\b[A-Z]{4}0[A-Z0-9]{6}\b/g, // IFSC Code
+                    /\b\d{2}[A-Z]{5}\d{4}[A-Z]{1}[A-Z\d]{1}[Z]{1}[A-Z\d]{1}\b/g, // GSTIN (India)
+                    /confidential|secret|private|restricted|aadhaar|pan number|bank account|ifsc|gstin|dob|date of birth|mobile|address|residence/gi // Keywords
+                ];
+
+                let count = 0;
+
+                textContent.items.forEach(item => {
+                    const text = item.str;
+                    let matches = false;
+                    for (let pattern of patterns) {
+                        if (pattern.test(text)) {
+                            matches = true;
+                            break;
+                        }
+                    }
+
+                    if (matches) {
+                        // Calculate bbox from PDF transform
+                        // item.transform = [scaleX, skewY, skewX, scaleY, x, y]
+                        const tx = item.transform;
+
+                        // Approx height comes from font size (scaleY or item.height)
+                        // In some PDF.js versions, height isn't explicit in item, so use transform[3] which is scaleY (~fontSize)
+                        const fontSize = Math.sqrt(tx[0] * tx[0] + tx[1] * tx[1]);
+                        const pdfHeight = item.height || fontSize;
+                        const pdfWidth = item.width;
+                        const pdfX = tx[4];
+                        const pdfY = tx[5];
+
+                        // PDF Y is bottom-left, but we need top-left for rect drawing usually?
+                        // Actually viewport.convertToViewportRectangle handles coordinate system flip.
+                        // Pass [x_min, y_min, x_max, y_max] in PDF coords
+                        // y_min = pdfY, y_max = pdfY + pdfHeight
+
+                        const rectPDF = [pdfX, pdfY, pdfX + pdfWidth, pdfY + pdfHeight];
+                        const rectView = viewport.convertToViewportRectangle(rectPDF);
+
+                        // rectView = [x1, y1, x2, y2]
+                        const x1 = Math.min(rectView[0], rectView[2]);
+                        const x2 = Math.max(rectView[0], rectView[2]);
+                        const y1 = Math.min(rectView[1], rectView[3]);
+                        const y2 = Math.max(rectView[1], rectView[3]);
+
+                        const w = x2 - x1;
+                        const h = y2 - y1;
+                        const x = x1;
+                        const y = y1;
+
+                        // Store normalized
+                        if (!redactions[pageNum]) redactions[pageNum] = [];
+
+                        redactions[pageNum].push({
+                            x: x / drawCanvas.width,
+                            y: y / drawCanvas.height,
+                            w: w / drawCanvas.width,
+                            h: h / drawCanvas.height
+                        });
+                        count++;
+                    }
                 });
 
-                document.getElementById('pageInfo').innerText = `Page ${num} / ${pdfDoc.numPages}`;
-            });
-        }
+                redrawRects(pageNum);
+                if (count > 0) {
+                    alert(`Found and redacted ${count} sensitive items on this page.`);
+                } else {
+                    alert("No sensitive patterns detected on this page.");
+                }
+
+            } catch (e) {
+                console.error(e);
+                alert("Scan check failed: " + e.message);
+            } finally {
+                btn.innerHTML = originalText;
+            }
+        });
 
         // Mouse Events for Drawing
         drawCanvas.addEventListener('mousedown', (e) => {
