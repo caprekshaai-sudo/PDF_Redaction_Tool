@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Secure PDF Redactor</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+</head>
+
+<body>
+    <div class="background-shapes">
+        <div class="shape shape-1"></div>
+        <div class="shape shape-2"></div>
+        <div class="shape shape-3"></div>
+    </div>
+
+    <div class="container">
+        <div class="glass-card">
+            <header>
+                <h1>Secure PDF Redactor</h1>
+                <p>Protect your sensitive information instantly.</p>
+            </header>
+
+            <form action="/redact" method="POST" enctype="multipart/form-data" id="redactForm">
+
+                <div class="upload-area" id="drop-area">
+                    <i class="fas fa-cloud-upload-alt upload-icon"></i>
+                    <p>Drag & Drop your PDF here</p>
+                    <span>or</span>
+                    <label for="pdf_file" class="file-btn">Browse Files</label>
+                    <input type="file" name="pdf_file" id="pdf_file" accept=".pdf" required hidden>
+                    <p class="file-name" id="file-name"></p>
+                </div>
+
+                <div class="input-group">
+                    <label for="keywords"><i class="fas fa-pen-nib"></i> Words to Redact</label>
+                    <input type="text" name="keywords" id="keywords" placeholder="e.g. Confidential, Secret, Name"
+                        required>
+                    <small>Separate multiple words with commas</small>
+                </div>
+
+                <div class="options-row">
+                    <div class="setting-item">
+                        <label class="switch">
+                            <input type="checkbox" name="case_sensitive" value="true">
+                            <span class="slider round"></span>
+                        </label>
+                        <span>Case Sensitive</span>
+                    </div>
+
+                    <div class="setting-item">
+                        <label for="color">Redaction Color</label>
+                        <input type="color" name="color" id="color" value="#000000">
+                    </div>
+                </div>
+
+                <button type="submit" class="cta-btn" id="submitBtn">
+                    <span>Redact PDF (Text)</span>
+                    <div class="spinner" id="spinner"></div>
+                </button>
+
+                <div style="margin-top: 20px; text-align: center;">
+                    <p>or try the new</p>
+                    <a href="/visual" class="cta-btn"
+                        style="background: rgba(255,255,255,0.1); border: 1px solid white; margin-top: 10px; display: inline-block; text-decoration: none; width: auto; padding: 10px 30px;">
+                        <i class="fas fa-eye"></i> Visual Redactor
+                    </a>
+                </div>
+            </form>
+        </div>
+
+        <footer>
+            <p>Developed by <strong>CA Preksha Jain</strong> &copy; <span id="year"></span></p>
+        </footer>
+    </div>
+
+    <script>
+        // Update Year
+        document.getElementById('year').innerText = new Date().getFullYear();
+
+        // Drag & Drop Logic
+        const dropArea = document.getElementById('drop-area');
+        const fileInput = document.getElementById('pdf_file');
+        const fileNameDisplay = document.getElementById('file-name');
+
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            dropArea.addEventListener(eventName, preventDefaults, false);
+        });
+
+        function preventDefaults(e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+
+        ['dragenter', 'dragover'].forEach(eventName => {
+            dropArea.addEventListener(eventName, highlight, false);
+        });
+
+        ['dragleave', 'drop'].forEach(eventName => {
+            dropArea.addEventListener(eventName, unhighlight, false);
+        });
+
+        function highlight(e) {
+            dropArea.classList.add('highlight');
+        }
+
+        function unhighlight(e) {
+            dropArea.classList.remove('highlight');
+        }
+
+        dropArea.addEventListener('drop', handleDrop, false);
+
+        function handleDrop(e) {
+            const dt = e.dataTransfer;
+            const files = dt.files;
+            fileInput.files = files;
+            updateFileName(files[0]);
+        }
+
+        fileInput.addEventListener('change', function () {
+            updateFileName(this.files[0]);
+        });
+
+        function updateFileName(file) {
+            if (file) {
+                fileNameDisplay.textContent = `Selected: ${file.name}`;
+                dropArea.classList.add('has-file');
+            }
+        }
+
+        // Form Submit Loading
+        const form = document.getElementById('redactForm');
+        const btn = document.getElementById('submitBtn');
+        const spinner = document.getElementById('spinner');
+
+        form.addEventListener('submit', function () {
+            btn.classList.add('loading');
+            spinner.style.display = 'block';
+            // Simple timeout to reset button if download happens quickly (since it's a form post, page validates)
+            setTimeout(() => {
+                // In a real SPA we'd handle this better, but form submit reloads or downloads.
+                // If download, the page stays. We reset after a few seconds.
+                btn.classList.remove('loading');
+                spinner.style.display = 'none';
+            }, 3000);
+        });
+    </script>
+</body>
+
+</html>

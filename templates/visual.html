@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Visual Redactor - Secure PDF Redactor</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+
+    <!-- PDF.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
+    <script>
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
+    </script>
+
+    <style>
+        .visual-container {
+            max-width: 900px;
+        }
+
+        .toolbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 10px;
+            margin-bottom: 20px;
+        }
+
+        .tool-btn {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: white;
+            padding: 8px 15px;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .tool-btn:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        #canvas-container {
+            position: relative;
+            width: 100%;
+            height: 600px;
+            /* specific height for scroll */
+            overflow: auto;
+            background: rgba(0, 0, 0, 0.3);
+            display: flex;
+            justify-content: center;
+            padding: 20px;
+            border-radius: 10px;
+        }
+
+        canvas {
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5);
+        }
+
+        #draw-layer {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 10;
+            cursor: crosshair;
+        }
+
+        #pdf-render {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 1;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="background-shapes">
+        <div class="shape shape-1"></div>
+        <div class="shape shape-2"></div>
+        <div class="shape shape-3"></div>
+    </div>
+
+    <div class="container visual-container">
+        <div class="glass-card">
+            <header style="display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                    <a href="/" style="color:white; text-decoration:none; margin-right:15px;"><i
+                            class="fas fa-arrow-left"></i> Back</a>
+                    <h1 style="display:inline;">Visual Redactor</h1>
+                </div>
+            </header>
+
+            <div class="toolbar">
+                <div>
+                    <input type="file" id="visualPdfInput" accept=".pdf" hidden>
+                    <button class="tool-btn" onclick="document.getElementById('visualPdfInput').click()">
+                        <i class="fas fa-upload"></i> Upload PDF
+                    </button>
+                    <span id="fileName" style="margin-left: 10px; font-size: 0.9rem;"></span>
+                </div>
+
+                <div class="pagination">
+                    <button class="tool-btn" id="prevPage"><i class="fas fa-chevron-left"></i></button>
+                    <span id="pageInfo" style="margin: 0 10px;">Page 0 / 0</span>
+                    <button class="tool-btn" id="nextPage"><i class="fas fa-chevron-right"></i></button>
+                </div>
+
+                <button class="cta-btn" id="saveBtn" style="width: auto; padding: 8px 20px;">
+                    <i class="fas fa-file-pdf"></i> Redact & Download
+                </button>
+            </div>
+
+            <div id="canvas-container">
+                <canvas id="pdf-render"></canvas>
+                <canvas id="draw-layer"></canvas>
+            </div>
+
+            <p style="margin-top: 15px; font-size: 0.8rem; opacity: 0.7;">
+                Draw rectangles over the text you want to redact. Use Next/Prev to navigate pages.
+            </p>
+        </div>
+
+        <footer style="text-align: center; margin-top: 30px; color: rgba(255,255,255,0.6); font-size: 0.9rem;">
+            <p>Developed by <strong>CA Preksha Jain</strong> &copy; <span id="year"></span></p>
+        </footer>
+    </div>
+
+    <script>
+        document.getElementById('year').innerText = new Date().getFullYear();
+
+        let pdfDoc = null;
+        let pageNum = 1;
+        let scale = 1.2;
+        let canvas = document.getElementById('pdf-render');
+        let ctx = canvas.getContext('2d');
+        let drawCanvas = document.getElementById('draw-layer');
+        let drawCtx = drawCanvas.getContext('2d');
+
+        // Data Structure: { pageIndex (1-based): [ {x, y, w, h} normalized 0-1 ] }
+        let redactions = {};
+
+        let isDrawing = false;
+        let startX = 0, startY = 0;
+        let currentFile = null;
+
+        const input = document.getElementById('visualPdfInput');
+
+        input.addEventListener('change', function (e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            currentFile = file;
+            document.getElementById('fileName').innerText = file.name;
+
+            const reader = new FileReader();
+            reader.onload = function (ev) {
+                const typedarray = new Uint8Array(ev.target.result);
+                pdfjsLib.getDocument(typedarray).promise.then(function (pdf) {
+                    pdfDoc = pdf;
+                    pageNum = 1;
+                    redactions = {};
+                    renderPage(pageNum);
+                });
+            };
+            reader.readAsArrayBuffer(file);
+        });
+
+        document.getElementById('prevPage').addEventListener('click', () => {
+            if (pageNum <= 1) return;
+            pageNum--;
+            renderPage(pageNum);
+        });
+
+        document.getElementById('nextPage').addEventListener('click', () => {
+            if (!pdfDoc || pageNum >= pdfDoc.numPages) return;
+            pageNum++;
+            renderPage(pageNum);
+        });
+
+        function renderPage(num) {
+            pdfDoc.getPage(num).then(function (page) {
+                let viewport = page.getViewport({ scale: scale });
+
+                canvas.height = viewport.height;
+                canvas.width = viewport.width;
+                drawCanvas.height = viewport.height;
+                drawCanvas.width = viewport.width;
+
+                // Center align
+                // handled by CSS transform
+
+                let renderContext = {
+                    canvasContext: ctx,
+                    viewport: viewport
+                };
+
+                page.render(renderContext).promise.then(() => {
+                    // Start Drawing logic setup
+                    redrawRects(num);
+                });
+
+                document.getElementById('pageInfo').innerText = `Page ${num} / ${pdfDoc.numPages}`;
+            });
+        }
+
+        // Mouse Events for Drawing
+        drawCanvas.addEventListener('mousedown', (e) => {
+            isDrawing = true;
+            const rect = drawCanvas.getBoundingClientRect();
+            startX = e.clientX - rect.left;
+            startY = e.clientY - rect.top;
+        });
+
+        drawCanvas.addEventListener('mousemove', (e) => {
+            if (!isDrawing) return;
+            const rect = drawCanvas.getBoundingClientRect();
+            const currentX = e.clientX - rect.left;
+            const currentY = e.clientY - rect.top;
+
+            redrawRects(pageNum); // Clear and draw saved
+
+            // Draw current dragging rect
+            drawCtx.fillStyle = "rgba(0, 0, 0, 0.5)";
+            drawCtx.fillRect(startX, startY, currentX - startX, currentY - startY);
+        });
+
+        drawCanvas.addEventListener('mouseup', (e) => {
+            if (!isDrawing) return;
+            isDrawing = false;
+            const rect = drawCanvas.getBoundingClientRect();
+            const endX = e.clientX - rect.left;
+            const endY = e.clientY - rect.top;
+
+            let w = Math.abs(endX - startX);
+            let h = Math.abs(endY - startY);
+            let x = Math.min(startX, endX);
+            let y = Math.min(startY, endY);
+
+            // Store normalized coordinates (0-1)
+            if (w > 5 && h > 5) {
+                if (!redactions[pageNum]) redactions[pageNum] = [];
+                redactions[pageNum].push({
+                    x: x / drawCanvas.width,
+                    y: y / drawCanvas.height,
+                    w: w / drawCanvas.width,
+                    h: h / drawCanvas.height
+                });
+            }
+            redrawRects(pageNum);
+        });
+
+        function redrawRects(pNum) {
+            drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
+            if (redactions[pNum]) {
+                drawCtx.fillStyle = "black";
+                redactions[pNum].forEach(r => {
+                    drawCtx.fillRect(
+                        r.x * drawCanvas.width,
+                        r.y * drawCanvas.height,
+                        r.w * drawCanvas.width,
+                        r.h * drawCanvas.height
+                    );
+                });
+            }
+        }
+
+        // Save & Send
+        document.getElementById('saveBtn').addEventListener('click', async () => {
+            if (!currentFile) return alert("Please upload a PDF first");
+
+            const btn = document.getElementById('saveBtn');
+            const originalText = btn.innerHTML;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Processing...';
+
+            const formData = new FormData();
+            formData.append('pdf_file', currentFile);
+            formData.append('redactions', JSON.stringify(redactions)); // Send JSON map
+
+            try {
+                const res = await fetch('/redact-visual', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (res.ok) {
+                    const blob = await res.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = "redacted_document.pdf";
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                } else {
+                    const txt = await res.text();
+                    alert("Error: " + txt);
+                }
+            } catch (err) {
+                console.error(err);
+                alert("Network Error");
+            } finally {
+                btn.innerHTML = originalText;
+            }
+        });
+
+    </script>
+</body>
+
+</html>
